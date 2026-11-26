@@ -4,14 +4,16 @@
   "private": true,
   "description": "Reliable webhook processor: NestJS API + PostgreSQL-backed workers",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "nest build",
     "start:api": "node dist/main.js",
     "start:worker": "node dist/main.worker.js",
     "migrate": "node dist/migrate.js",
-    "dev:api": "ts-node src/main.ts",
-    "dev:worker": "ts-node src/main.worker.ts",
-    "test": "jest --runInBand",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "dev:api": "nest start --watch",
+    "dev:worker": "nest start --watch --entryFile main.worker",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "jest --runInBand"
   },
   "jest": {
     "preset": "ts-jest",
@@ -23,7 +25,8 @@
     "testTimeout": 60000,
     "setupFiles": [
       "<rootDir>/test/setup.ts"
-    ]
+    ],
+    "globalSetup": "<rootDir>/test/global-setup.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.12",
@@ -59,5 +62,8 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.74.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
