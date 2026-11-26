@@ -123,5 +123,19 @@ services:
       postgres:
         condition: service_healthy
 
+  # Load generator for scripts/demo-burst.sh: docker compose --profile tools run --rm burst
+  burst:
+    profiles: ['tools']
+    build:
+      context: ./backend
+      target: test
+    command: ['npx', 'ts-node', '--transpile-only', 'scripts/burst.ts']
+    environment:
+      API_URL: http://api:3000
+      TOTAL: 500
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   pgdata:
