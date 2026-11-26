@@ -16,6 +16,8 @@ export class WorkerRunner {
   private stopping = false;
   private loopDone: Promise<void> | undefined;
   private wakeUp: (() => void) | undefined;
+  private recoveryTimer: NodeJS.Timeout | undefined;
+  private recovering = false;
 
   constructor(
     private readonly queue: EventQueue,
@@ -34,6 +36,8 @@ export class WorkerRunner {
       `Worker ${this.settings.workerId} started (concurrency ${this.settings.concurrency})`,
     );
     this.loopDone = this.loop();
+    void this.recover();
+    this.recoveryTimer = setInterval(() => void this.recover(), this.settings.recoveryIntervalMs);
   }
 
   /**
@@ -43,6 +47,7 @@ export class WorkerRunner {
   async stop(): Promise<void> {
     if (!this.loopDone) return;
     this.stopping = true;
+    clearInterval(this.recoveryTimer);
     this.wakeUp?.();
     await this.loopDone;
     this.loopDone = undefined;
@@ -80,6 +85,23 @@ export class WorkerRunner {
     }
   }
 
+  /** Hands events whose owner died back to the queue. Every worker does this; it is idempotent. */
+  private async recover(): Promise<void> {
+    if (this.recovering) return;
+    this.recovering = true;
+    try {
+      const recovered = await this.queue.recoverExpiredLeases();
+      for (const { eventId, status } of recovered) {
+        this.logger.warn({ eventId, status }, 'Recovered event with an expired lease');
+      }
+      if (recovered.some((r) => r.status === 'pending')) this.wakeUp?.();
+    } catch (err) {
+      this.logger.error(`Lease recovery failed: ${errorMessage(err)}`);
+    } finally {
+      this.recovering = false;
+    }
+  }
+
   /** Sleeps until the poll interval passes or a slot frees up. */
   private idle(ms: number): Promise<void> {
     return new Promise((resolve) => {
@@ -103,6 +125,7 @@ export class WorkerRunner {
 
   private async handle(claim: ClaimedEvent, abort: AbortController): Promise<void> {
     const ctx = { eventId: claim.eventId, attempt: claim.attemptNumber };
+    const stopHeartbeat = this.startHeartbeat(claim, abort);
     try {
       await this.processor.process(claim, abort.signal);
       this.logger.log(ctx, 'Event processed');
@@ -113,7 +136,50 @@ export class WorkerRunner {
         return;
       }
       await this.recordFailure(claim, err);
+    } finally {
+      stopHeartbeat();
     }
+  }
+
+  /**
+   * Renews the lease every heartbeatMs while the event is processed, so work longer than the lease
+   * (slow:N with a big N) is not taken over while this worker is alive. If the lease turns out to
+   * be gone, or cannot be renewed before it runs out, the work is aborted: past that point another
+   * worker may legitimately own the event.
+   */
+  private startHeartbeat(claim: ClaimedEvent, abort: AbortController): () => void {
+    // Conservative local view of the lease: measured from before the claim/renewal was sent.
+    let leaseValidUntil = Date.now() + this.settings.leaseMs - this.settings.heartbeatMs;
+    let renewing = false;
+
+    const timer = setInterval(() => {
+      if (renewing || abort.signal.aborted) return;
+      renewing = true;
+      const sentAt = Date.now();
+      this.queue
+        .renewLease(claim)
+        .then((stillOwned) => {
+          if (stillOwned) {
+            leaseValidUntil = sentAt + this.settings.leaseMs;
+          } else {
+            abort.abort(new LeaseLostError('Lease was taken over by another worker'));
+          }
+        })
+        .catch((err: unknown) => {
+          this.logger.warn(
+            { eventId: claim.eventId, error: errorMessage(err) },
+            'Lease renewal failed',
+          );
+          if (Date.now() >= leaseValidUntil) {
+            abort.abort(new LeaseLostError('Could not renew the lease before it expired'));
+          }
+        })
+        .finally(() => {
+          renewing = false;
+        });
+    }, this.settings.heartbeatMs);
+
+    return () => clearInterval(timer);
   }
 
   private async recordFailure(claim: ClaimedEvent, err: unknown): Promise<void> {

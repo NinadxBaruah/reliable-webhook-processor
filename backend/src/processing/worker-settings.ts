@@ -12,6 +12,7 @@ export interface WorkerSettings {
   backoffMaxMs: number;
   leaseMs: number;
   heartbeatMs: number;
+  recoveryIntervalMs: number;
   shutdownGraceMs: number;
 }
 
@@ -25,6 +26,7 @@ export function workerSettingsFromEnv(env: Env): WorkerSettings {
     backoffMaxMs: env.BACKOFF_MAX_MS,
     leaseMs: env.LEASE_MS,
     heartbeatMs: env.HEARTBEAT_MS,
+    recoveryIntervalMs: env.RECOVERY_INTERVAL_MS,
     shutdownGraceMs: env.SHUTDOWN_GRACE_MS,
   };
 }

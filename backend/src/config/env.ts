@@ -32,6 +32,8 @@ export const envSchema = z
     LEASE_MS: int(15_000, 100),
     /** How often a worker renews the lease of each event it is processing. */
     HEARTBEAT_MS: int(5_000, 10),
+    /** How often each worker looks for expired leases to recover. */
+    RECOVERY_INTERVAL_MS: int(2_000, 10),
     /** On SIGTERM, how long in-flight events may finish before they are handed back. */
     SHUTDOWN_GRACE_MS: int(10_000, 0),
   })

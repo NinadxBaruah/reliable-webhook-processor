@@ -91,6 +91,71 @@ export class EventQueue {
   }
 
   /**
+   * Heartbeat: pushes the lease forward while the worker is still working on the event.
+   * Returns false when the lease is no longer ours (expired and recovered by another worker).
+   */
+  async renewLease(claim: ClaimedEvent): Promise<boolean> {
+    const result = await this.db
+      .updateTable('webhook_events')
+      .set({
+        lease_expires_at: sql`now() + ${this.settings.leaseMs}::int * interval '1 millisecond'`,
+      })
+      .where('event_id', '=', claim.eventId)
+      .where('status', '=', 'processing')
+      .where('lease_token', '=', claim.leaseToken)
+      .executeTakeFirst();
+    return result.numUpdatedRows > 0n;
+  }
+
+  /**
+   * Crash recovery. A 'processing' event whose lease expired belongs to a worker that stopped
+   * renewing it (killed, crashed, frozen or cut off from the database). Its open attempt is closed
+   * as 'abandoned' and the event goes back to 'pending' for immediate pickup, or to 'failed' if
+   * that attempt used up the retry budget. SKIP LOCKED lets every worker run this concurrently.
+   * Nothing here touches processed_orders: if the dead worker had committed its business row it
+   * would also have committed 'succeeded', and the event would not be in 'processing'.
+   */
+  async recoverExpiredLeases(limit = 100): Promise<{ eventId: string; status: EventStatus }[]> {
+    const { rows } = await sql<{ event_id: string; status: EventStatus }>`
+      with expired as (
+        select event_id, attempt_count, budget_start_attempt, locked_by
+        from webhook_events
+        where status = 'processing' and lease_expires_at < now()
+        order by lease_expires_at
+        limit ${limit}::int
+        for update skip locked
+      ),
+      attempt as (
+        update event_attempts a
+        set result = 'abandoned',
+            finished_at = now(),
+            error = 'Lease expired: worker ' || expired.locked_by || ' stopped renewing it'
+        from expired
+        where a.event_id = expired.event_id
+          and a.attempt_number = expired.attempt_count
+          and a.result = 'running'
+      )
+      update webhook_events e
+      set status = case
+            when expired.attempt_count - expired.budget_start_attempt >= ${this.settings.maxAttempts}::int
+              then 'failed' else 'pending' end,
+          next_attempt_at = now(),
+          last_error = 'Lease expired: worker ' || expired.locked_by || ' stopped renewing it',
+          locked_by = null,
+          lease_token = null,
+          lease_expires_at = null,
+          updated_at = now(),
+          completed_at = case
+            when expired.attempt_count - expired.budget_start_attempt >= ${this.settings.maxAttempts}::int
+              then now() end
+      from expired
+      where e.event_id = expired.event_id
+      returning e.event_id, e.status
+    `.execute(this.db);
+    return rows.map((r) => ({ eventId: r.event_id, status: r.status }));
+  }
+
+  /**
    * Runs the business action and marks the event succeeded in ONE transaction, after re-checking
    * (and row-locking) the lease. Either both the business row and 'succeeded' are committed or
    * neither is, so a crash can never leave work done but the event unfinished. A worker that lost
