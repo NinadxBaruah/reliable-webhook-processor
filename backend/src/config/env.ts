@@ -32,6 +32,8 @@ export const envSchema = z
     LEASE_MS: int(15_000, 100),
     /** How often a worker renews the lease of each event it is processing. */
     HEARTBEAT_MS: int(5_000, 10),
+    /** On SIGTERM, how long in-flight events may finish before they are handed back. */
+    SHUTDOWN_GRACE_MS: int(10_000, 0),
   })
   .refine((env) => env.HEARTBEAT_MS * 2 <= env.LEASE_MS, {
     message: 'HEARTBEAT_MS must be at most half of LEASE_MS so one missed heartbeat is survivable',
