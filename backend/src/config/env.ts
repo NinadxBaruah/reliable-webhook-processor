@@ -10,7 +10,9 @@ const int = (fallback: number, min = 0) => z.coerce.number().int().min(min).defa
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-    LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+    LOG_LEVEL: z
+      .enum(['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace'])
+      .default('info'),
     PORT: int(3000, 1),
     DATABASE_URL: z.string().url(),
     DB_POOL_MAX: int(10, 1),

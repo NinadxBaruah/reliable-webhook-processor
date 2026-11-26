@@ -12,7 +12,6 @@
     "sourceMap": true,
     "outDir": "./dist",
     "baseUrl": "./",
-    "incremental": true,
     "strict": true,
     "strictPropertyInitialization": false,
     "noFallthroughCasesInSwitch": true,
