@@ -148,14 +148,15 @@ export class WorkerRunner {
    * worker may legitimately own the event.
    */
   private startHeartbeat(claim: ClaimedEvent, abort: AbortController): () => void {
-    // Conservative local view of the lease: measured from before the claim/renewal was sent.
-    let leaseValidUntil = Date.now() + this.settings.leaseMs - this.settings.heartbeatMs;
+    // Conservative local view of the lease, on the monotonic clock (immune to wall-clock jumps),
+    // measured from before the claim/renewal was sent.
+    let leaseValidUntil = performance.now() + this.settings.leaseMs - this.settings.heartbeatMs;
     let renewing = false;
 
     const timer = setInterval(() => {
       if (renewing || abort.signal.aborted) return;
       renewing = true;
-      const sentAt = Date.now();
+      const sentAt = performance.now();
       this.queue
         .renewLease(claim)
         .then((stillOwned) => {
@@ -170,7 +171,7 @@ export class WorkerRunner {
             { eventId: claim.eventId, error: errorMessage(err) },
             'Lease renewal failed',
           );
-          if (Date.now() >= leaseValidUntil) {
+          if (performance.now() >= leaseValidUntil) {
             abort.abort(new LeaseLostError('Could not renew the lease before it expired'));
           }
         })
